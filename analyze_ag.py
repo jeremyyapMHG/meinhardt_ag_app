@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 from sqlalchemy import text
 from db import engine
+import re
 
 
 def render(username):
@@ -12,10 +13,16 @@ def render(username):
     with engine.begin() as conn:
         # Get all relevant inputs
         raw_submissions = pd.read_sql(
-            text("SELECT data_point_id, field_name, value FROM devco_submissions WHERE devco_id = :devco_id"),
+            text("""
+                 SELECT data_point, field_name, value 
+                 FROM devco_submissions 
+                 WHERE devco_id = :devco_id
+                 AND field_name = 'input_value'
+                 """),
             conn,
             params={"devco_id": devco_id}
         )
+        st.write(raw_submissions)
         # Get assessment matrix
         matrix = pd.read_sql(text("SELECT * FROM assessment_matrix"), conn)
 
@@ -26,34 +33,41 @@ def render(username):
     st.subheader("=== CLEANED DEVCO INPUTS ===")
 
     flat_inputs = {}
+    alias_map = {}
+
     for _, row in raw_submissions.iterrows():
-        field = row["field_name"]
-        val = row["value"]
+        # Strip off any parentheses text from data_point (e.g., " (No.)", " (Text)", etc.)
+        clean_point = re.sub(r"\s*\(.*?\)", "", row["data_point"]).strip()
+        raw_key     = f"{clean_point}"
+
+        # Turn it into a valid Python identifier
+        alias = re.sub(r"[^\w]", "_", raw_key).lower()
+        alias_map[raw_key] = alias
+
+        # Parse numeric or fallback to zero
         try:
-            flat_inputs[field] = float(val)
+            flat_inputs[alias] = float(row["value"])
         except:
-            flat_inputs[field] = val
-
-    st.json(flat_inputs)
-
-    import re
-
-    import re
+            flat_inputs[alias] = 0.0
+    local_vars = dict(flat_inputs)
 
     # Step A: Build alias map
-    alias_map = {}
-    for key in flat_inputs:
-        alias = re.sub(r"[^\w]", "_", key.strip()).lower()
-        alias_map[key] = alias
+    # alias_map = {}
+    # for key in flat_inputs:
+    #     alias = re.sub(r"[^\w]", "_", key.strip()).lower()
+    #     alias_map[key] = alias
+    
+    # st.write("Alias Map: ", alias_map)
 
-    # Step B: Assign values to each alias variable
-    for original, alias in alias_map.items():
-        try:
-            exec(f"{alias} = float(flat_inputs[original])")
-        except:
-            exec(f"{alias} = 0")  # Default to 0 if conversion fails
+    # # Step B: Assign values to each alias variable
+    # for original, alias in alias_map.items():
+    #     try:
+    #         exec(f"{alias} = float(flat_inputs[original])")
+    #     except:
+    #         exec(f"{alias} = 0")  # Default to 0 if conversion fails
 
-    import re
+    # st.write("Alias: ", alias)
+
 
     results = [] 
 
@@ -65,37 +79,39 @@ def render(username):
         st.markdown(f"**Evaluating Formula for:** `{criteria}`")
         st.markdown(f"→ Raw formula: `{formula}`")
 
+        # Step 1: Clean formula 
+        cleaned = formula.replace("\xa0", " ")
+        cleaned = re.sub(r"[“”]", '"', cleaned)
+        cleaned = re.sub(r"[‘’]", "'", cleaned)
+        cleaned = re.sub(r"\s*\(.*?\)", "", cleaned)  # strip parentheses
+        
+        # Step 2: replace human-readable keys with aliases
+        expr = cleaned
+
+        for raw_key, alias in alias_map.items():
+            expr = expr.replace(raw_key, alias)
+
+        st.markdown(f"→ Replaced with values: `{expr}`")
+
+        # Step 3: eval safely
         try:
-            # STEP 1: Clean formula (remove non-breaking spaces, smart quotes, etc.)
-            cleaned_formula = formula.replace('\xa0', ' ')  # U+00A0 non-breaking space
-            cleaned_formula = re.sub(r'[“”]', '"', cleaned_formula)
-            cleaned_formula = re.sub(r"[‘’]", "'", cleaned_formula)
-
-            # STEP 2: Replace field names with their alias versions
-            replaced_formula = cleaned_formula
-            for original, alias in alias_map.items():
-                replaced_formula = replaced_formula.replace(original, alias)
-
-            st.markdown(f"→ Replaced with values: `{replaced_formula}`")
-
-            # STEP 3: Eval
-            result = eval(replaced_formula)
-            st.success(f" Result = {result}")
-
-            results.append({
-                "assessment_criteria": criteria,
-                "score": result,
-                "weightage": weight
-            })
+            score = eval(expr, {}, local_vars)
+            st.markdown(f"→ Computed score: `{score}`")
 
         except Exception as e:
-            st.error(f" Failed to evaluate: {e}")
-            results.append({
-                "assessment_criteria": criteria,
-                "score": None,
-                "weightage": weight,
-                "error": str(e)
-            })
+            score = None
+            st.markdown(f"→ Computed score: `{score}`")
+            # error = str(e)
+
+        results.append({
+            "assessment_criteria": criteria,
+            "score":               score,
+            "weightage":           weight,
+            # "error":               error,
+            "formula":            cleaned
+        })
 
     st.subheader("Final Computed Scores")
     st.dataframe(pd.DataFrame(results), use_container_width=True)
+        # return pd.DataFrame(results)
+    
