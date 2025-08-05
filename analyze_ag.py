@@ -22,7 +22,6 @@ def render(username):
             conn,
             params={"devco_id": devco_id}
         )
-        st.write(raw_submissions)
         # Get assessment matrix
         matrix = pd.read_sql(text("SELECT * FROM assessment_matrix"), conn)
 
@@ -38,36 +37,18 @@ def render(username):
     for _, row in raw_submissions.iterrows():
         # Strip off any parentheses text from data_point (e.g., " (No.)", " (Text)", etc.)
         clean_point = re.sub(r"\s*\(.*?\)", "", row["data_point"]).strip()
-        raw_key     = f"{clean_point}"
-
+        
         # Turn it into a valid Python identifier
-        alias = re.sub(r"[^\w]", "_", raw_key).lower()
-        alias_map[raw_key] = alias
-
+        alias = re.sub(r"[^\w]", "_", clean_point).lower()
+        alias_map[clean_point] = alias # for reference later
+        
         # Parse numeric or fallback to zero
         try:
             flat_inputs[alias] = float(row["value"])
         except:
             flat_inputs[alias] = 0.0
-    local_vars = dict(flat_inputs)
 
-    # Step A: Build alias map
-    # alias_map = {}
-    # for key in flat_inputs:
-    #     alias = re.sub(r"[^\w]", "_", key.strip()).lower()
-    #     alias_map[key] = alias
-    
-    # st.write("Alias Map: ", alias_map)
-
-    # # Step B: Assign values to each alias variable
-    # for original, alias in alias_map.items():
-    #     try:
-    #         exec(f"{alias} = float(flat_inputs[original])")
-    #     except:
-    #         exec(f"{alias} = 0")  # Default to 0 if conversion fails
-
-    # st.write("Alias: ", alias)
-
+    submissions_dict = dict(flat_inputs)
 
     results = [] 
 
@@ -83,19 +64,18 @@ def render(username):
         cleaned = formula.replace("\xa0", " ")
         cleaned = re.sub(r"[“”]", '"', cleaned)
         cleaned = re.sub(r"[‘’]", "'", cleaned)
-        cleaned = re.sub(r"\s*\(.*?\)", "", cleaned)  # strip parentheses
+        cleaned_formula = re.sub(r"\s*\(.*?\)", "", cleaned)  # strip white space characters parentheses
         
         # Step 2: replace human-readable keys with aliases
-        expr = cleaned
 
-        for raw_key, alias in alias_map.items():
-            expr = expr.replace(raw_key, alias)
+        for clean_point, alias in alias_map.items():
+            expr = cleaned_formula.replace(clean_point, alias)
 
         st.markdown(f"→ Replaced with values: `{expr}`")
 
         # Step 3: eval safely
         try:
-            score = eval(expr, {}, local_vars)
+            score = eval(expr, {}, submissions_dict)
             st.markdown(f"→ Computed score: `{score}`")
 
         except Exception as e:
